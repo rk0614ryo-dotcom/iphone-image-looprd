@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+  >
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+
+  <title>高画質・7枚ランダム・無限ループ</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      overscroll-behavior: none;
+    }
+
+    .loop-container {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+      background: #000;
+      touch-action: pan-y;
+    }
+
+    .loop-track {
+      display: flex;
+      width: max-content;
+      height: 100%;
+      transform: translate3d(0, 0, 0);
+      will-change: transform;
+      backface-visibility: hidden;
+    }
+
+    .loop-img {
+      display: block;
+      flex: 0 0 100vw;
+      width: 100vw;
+      height: 100%;
+      max-width: none;
+      object-fit: cover;
+      object-position: center;
+      backface-visibility: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-user-drag: none;
+      pointer-events: none;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="loop-container">
+    <div class="loop-track" id="loopTrack"></div>
+  </div>
+
+  <script>
+    // =====================================
+    // 設定
+    // =====================================
+
+    const images = [
+      'from-PixAI-2071422299321309849-Photoroom.png',
+      'from-PixAI-2071423953728760827-Photoroom.png',
+      'from-PixAI-2071423973840303720-Photoroom.png',
+      'from-PixAI-2071422760798691428-Photoroom.png',
+      'from-PixAI-2071418940561212400-Photoroom.png',
+      'from-PixAI-2071426738139821117-Photoroom.png',
+      'from-PixAI-2071426961931180458-Photoroom.png'
+    ];
+
+    // 7枚分の移動時間（秒）
+    // 小さくすると速く、大きくすると遅くなる
+    const LOOP_DURATION = 50;
+
+    // 同じ画像の再登場を禁止する間隔
+    const MIN_GAP = 3;
+
+    // トラック内に維持する最低画像数
+    // 7枚単位で補充する
+    const MIN_BUFFER = 21;
+
+    const container =
+      document.querySelector('.loop-container');
+
+    const track =
+      document.getElementById('loopTrack');
+
+    // =====================================
+    // 状態管理
+    // =====================================
+
+    let previousSet = null;
+    let nextSetId = 0;
+
+    // トラック左端からの移動距離
+    let offset = 0;
+
+    // 1秒あたりの移動ピクセル数
+    let speed = 0;
+
+    let lastTimestamp = null;
+    let running = false;
+
+    // =====================================
+    // ランダムシャッフル
+    // =====================================
+
+    function shuffle(array) {
+      const result = [...array];
+
+      for (let i = result.length - 1; i > 0; i--) {
+        const j = Math.floor(
+          Math.random() * (i + 1)
+        );
+
+        [result[i], result[j]] =
+          [result[j], result[i]];
+      }
+
+      return result;
+    }
+
+    // =====================================
+    // 次の7枚を生成
+    //
+    // 7枚をそれぞれ1回ずつ使用。
+    // 前のセットの最後3枚と、
+    // 次のセットの最初3枚を重複させない。
+    // =====================================
+
+    function createNextSet() {
+      let nextSet;
+
+      if (previousSet === null) {
+        nextSet = shuffle(images);
+      } else {
+        const previousLastThree =
+          previousSet.slice(-MIN_GAP);
+
+        const candidates = images.filter(
+          src => !previousLastThree.includes(src)
+        );
+
+        const firstThree = shuffle(candidates)
+          .slice(0, MIN_GAP);
+
+        const remaining = shuffle(
+          images.filter(
+            src => !firstThree.includes(src)
+          )
+        );
+
+        nextSet = [...firstThree, ...remaining];
+      }
+
+      previousSet = nextSet;
+
+      return {
+        id: nextSetId++,
+        images: nextSet
+      };
+    }
+
+    // =====================================
+    // 画像を末尾に追加
+    // =====================================
+
+    function appendNextSet() {
+      const set = createNextSet();
+      const fragment =
+        document.createDocumentFragment();
+
+      set.images.forEach(src => {
+        const img = document.createElement('img');
+
+        img.src = src;
+        img.alt = '';
+        img.className = 'loop-img';
+        img.draggable = false;
+        img.decoding = 'async';
+
+        img.dataset.setId = String(set.id);
+
+        fragment.appendChild(img);
+      });
+
+      track.appendChild(fragment);
+    }
+
+    // =====================================
+    // 7枚分の幅と移動速度
+    //
+    // 各画像を画面幅いっぱいに表示する。
+    // =====================================
+
+    function calculateLoopWidth() {
+      return container.clientWidth * images.length;
+    }
+
+    function updateSpeed() {
+      const loopWidth = calculateLoopWidth();
+
+      speed = loopWidth / LOOP_DURATION;
+    }
+
+    // =====================================
+    // 通過済み画像を削除
+    // =====================================
+
+    function removePassedImages() {
+      while (track.firstElementChild) {
+        const first = track.firstElementChild;
+        const width =
+          first.getBoundingClientRect().width;
+
+        if (width <= 0 || offset < width) {
+          break;
+        }
+
+        offset -= width;
+        first.remove();
+      }
+    }
+
+    // =====================================
+    // 画像を先読みして補充
+    // =====================================
+
+    function maintainBuffer() {
+      while (track.children.length < MIN_BUFFER) {
+        appendNextSet();
+      }
+    }
+
+    // =====================================
+    // アニメーション
+    // =====================================
+
+    function animate(timestamp) {
+      if (!running) return;
+
+      if (lastTimestamp === null) {
+        lastTimestamp = timestamp;
+      }
+
+      let delta =
+        (timestamp - lastTimestamp) / 1000;
+
+      lastTimestamp = timestamp;
+
+      // 復帰時などの急激な移動を抑える
+      delta = Math.min(delta, 0.05);
+      delta = Math.max(delta, 0);
+
+      offset += speed * delta;
+
+      removePassedImages();
+      maintainBuffer();
+
+      track.style.transform =
+        `translate3d(${-offset}px, 0, 0)`;
+
+      requestAnimationFrame(animate);
+    }
+
+    // =====================================
+    // 画像の事前読み込み
+    // =====================================
+
+    function preloadImage(src) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+
+        img.onload = () => {
+          if (
+            img.naturalWidth === 0 ||
+            img.naturalHeight === 0
+          ) {
+            reject(
+              new Error(
+                '画像サイズを取得できません: ' + src
+              )
+            );
+            return;
+          }
+
+          resolve();
+        };
+
+        img.onerror = () => {
+          reject(
+            new Error(
+              '画像を読み込めません: ' + src
+            )
+          );
+        };
+
+        img.src = src;
+
+        if (
+          img.complete &&
+          img.naturalWidth > 0
+        ) {
+          resolve();
+        }
+      });
+    }
+
+    // =====================================
+    // 初期化
+    // =====================================
+
+    async function initLoop() {
+      try {
+        // 7枚すべての読み込みを待つ
+        await Promise.all(
+          images.map(preloadImage)
+        );
+
+        // 最初に4セットを準備
+        for (let i = 0; i < 4; i++) {
+          appendNextSet();
+        }
+
+        updateSpeed();
+
+        track.style.transform =
+          'translate3d(0, 0, 0)';
+
+        // レイアウトを確定
+        track.getBoundingClientRect();
+
+        running = true;
+        requestAnimationFrame(animate);
+
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    // =====================================
+    // 画面サイズ・向きの変更に対応
+    // =====================================
+
+    let resizeTimer = null;
+
+    function handleResize() {
+      if (resizeTimer !== null) {
+        clearTimeout(resizeTimer);
+      }
+
+      resizeTimer = setTimeout(() => {
+        if (!running) return;
+
+        // 表示位置を維持したまま速度を更新
+        updateSpeed();
+      }, 100);
+    }
+
+    window.addEventListener(
+      'resize',
+      handleResize,
+      { passive: true }
+    );
+
+    window.addEventListener(
+      'orientationchange',
+      handleResize,
+      { passive: true }
+    );
+
+    // =====================================
+    // バックグラウンド復帰に対応
+    // =====================================
+
+    document.addEventListener(
+      'visibilitychange',
+      () => {
+        lastTimestamp = null;
+      }
+    );
+
+    // 自動再生開始
+    initLoop();
+  </script>
+</body>
+</html>
